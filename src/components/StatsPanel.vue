@@ -8,6 +8,7 @@
     5. Live "current position" info during playback
     6. Top 5 closest stores ranked list
     7. Detailed info for the single closest store
+  Mobile: larger fonts and touch targets + a close button (CSS-controlled).
 -->
 <script setup>
 import { computed } from 'vue';
@@ -34,9 +35,9 @@ const emit = defineEmits([
   'update:search-query',
   'select-store',
   'clear-selection',
+  'close-sidebar',
 ]);
 
-/* Format a Unix-seconds timestamp into a friendly local string. */
 function formatTs(ts) {
   if (!ts) return '—';
   const d = new Date(ts * 1000);
@@ -46,7 +47,6 @@ function formatTs(ts) {
   });
 }
 
-/* Trip duration = last timestamp - first timestamp. */
 const tripDuration = computed(() => {
   if (!props.path?.length) return '—';
   const first = props.path[0].timeStamp;
@@ -75,7 +75,6 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
 
 const hasQuery = computed(() => props.searchQuery.trim().length > 0);
 
-/* Distance of the currently-selected store to the path (if it's the closest). */
 const selectedDistanceKm = computed(() => {
   if (!props.selectedStore || !props.closestStore) return null;
   if (props.selectedStore.name === props.closestStore.store.name) {
@@ -95,12 +94,20 @@ function clearSearch() {
 
 <template>
   <aside class="stats-panel">
+    <!-- Close button — shown only on mobile via CSS -->
+    <button
+      class="close-sidebar-btn"
+      @click="emit('close-sidebar')"
+      aria-label="Close panel"
+    >
+      ✕
+    </button>
+
     <header class="stats-header">
       <h1>Trip Summary</h1>
       <p class="subtitle">Vehicle path analysis</p>
     </header>
 
-    <!-- ============= Store search ============= -->
     <section class="search-section">
       <h2>Find a Store</h2>
 
@@ -118,9 +125,7 @@ function clearSearch() {
           class="search-clear"
           @click="clearSearch"
           aria-label="Clear search"
-        >
-          ×
-        </button>
+        >×</button>
       </div>
 
       <div v-if="hasQuery" class="search-results">
@@ -147,13 +152,10 @@ function clearSearch() {
           class="chip-close"
           @click="emit('clear-selection')"
           aria-label="Clear selection"
-        >
-          ×
-        </button>
+        >×</button>
       </div>
     </section>
 
-    <!-- ============= Focused store card ============= -->
     <section v-if="selectedStore" class="focused-store">
       <h2>Focused Store</h2>
       <div class="focused-name">{{ selectedStore.name }}</div>
@@ -178,7 +180,6 @@ function clearSearch() {
       </button>
     </section>
 
-    <!-- ============= Key stats ============= -->
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-icon">📏</div>
@@ -189,7 +190,6 @@ function clearSearch() {
           </div>
         </div>
       </div>
-
       <div class="stat-card">
         <div class="stat-icon">⚡</div>
         <div class="stat-body">
@@ -197,7 +197,6 @@ function clearSearch() {
           <div class="stat-value">{{ maxSpeed }} <span class="unit">km/h</span></div>
         </div>
       </div>
-
       <div class="stat-card">
         <div class="stat-icon">⏱️</div>
         <div class="stat-body">
@@ -205,7 +204,6 @@ function clearSearch() {
           <div class="stat-value">{{ tripDuration }}</div>
         </div>
       </div>
-
       <div class="stat-card">
         <div class="stat-icon">📍</div>
         <div class="stat-body">
@@ -215,7 +213,6 @@ function clearSearch() {
       </div>
     </div>
 
-    <!-- ============= Playback ============= -->
     <section class="playback">
       <h2>Playback</h2>
 
@@ -234,9 +231,7 @@ function clearSearch() {
           class="speed-btn"
           :class="{ active: playbackSpeed === opt }"
           @click="emit('update:playback-speed', opt)"
-        >
-          {{ opt }}x
-        </button>
+        >{{ opt }}x</button>
       </div>
 
       <div class="progress-wrap">
@@ -257,7 +252,6 @@ function clearSearch() {
       </div>
     </section>
 
-    <!-- ============= Top 5 closest stores ============= -->
     <section class="top-stores" v-if="topClosestStores.length">
       <h2>Top {{ topClosestStores.length }} Closest Stores</h2>
       <ol class="top-stores-list">
@@ -282,7 +276,6 @@ function clearSearch() {
       </ol>
     </section>
 
-    <!-- ============= Closest store detail ============= -->
     <section class="closest-store" v-if="closestStore">
       <h2>Closest Store — Details</h2>
       <div class="store-name">⭐ {{ closestStore.store.name }}</div>
@@ -327,6 +320,33 @@ function clearSearch() {
   overflow-y: auto;
   height: 100%;
   box-sizing: border-box;
+  position: relative;
+}
+
+/* Close button — hidden on desktop */
+.close-sidebar-btn {
+  display: none;
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  font-family: inherit;
+}
+
+.close-sidebar-btn:hover {
+  background: #e5e7eb;
+  color: #111827;
 }
 
 .stats-header h1 {
@@ -341,8 +361,6 @@ function clearSearch() {
   font-size: 13px;
   color: #6b7280;
 }
-
-/* =================== Search =================== */
 
 .search-section {
   margin-bottom: 20px;
@@ -504,8 +522,6 @@ function clearSearch() {
   color: #5b21b6;
 }
 
-/* =================== Focused store =================== */
-
 .focused-store {
   background: #f5f3ff;
   border: 1px solid #ddd6fe;
@@ -567,8 +583,6 @@ function clearSearch() {
   background: #f3e8ff;
 }
 
-/* =================== Stat cards =================== */
-
 .stat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -618,8 +632,6 @@ function clearSearch() {
   margin-left: 2px;
 }
 
-/* =================== Playback =================== */
-
 .playback {
   margin-bottom: 24px;
   padding-bottom: 20px;
@@ -652,6 +664,7 @@ function clearSearch() {
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
+  font-family: inherit;
 }
 
 .btn:hover {
@@ -747,8 +760,6 @@ function clearSearch() {
   margin-bottom: 4px;
 }
 
-/* =================== Top 5 stores =================== */
-
 .top-stores {
   margin-bottom: 24px;
   padding-bottom: 20px;
@@ -843,8 +854,6 @@ function clearSearch() {
   margin-left: 2px;
 }
 
-/* =================== Closest store detail =================== */
-
 .closest-store h2 {
   font-size: 14px;
   font-weight: 600;
@@ -902,10 +911,150 @@ function clearSearch() {
   .stats-panel {
     width: 100%;
     min-width: 0;
-    height: auto;
-    max-height: 45vh;
+    height: 100vh;
+    padding: 18px 16px 40px 16px;
     border-right: none;
-    border-top: 1px solid #e5e7eb;
+  }
+
+  /* Show close button on mobile */
+  .close-sidebar-btn {
+    display: flex;
+  }
+
+  .stats-header h1 {
+    font-size: 24px;
+  }
+
+  .stats-header .subtitle {
+    font-size: 14px;
+    margin-bottom: 22px;
+  }
+
+  .search-section h2,
+  .playback h2,
+  .top-stores h2,
+  .closest-store h2 {
+    font-size: 15px;
+  }
+
+  .search-box {
+    padding: 0 12px;
+  }
+
+  .search-input {
+    font-size: 16px;
+    padding: 13px 0;
+  }
+
+  .search-result {
+    padding: 13px 12px;
+    font-size: 14px;
+    border-radius: 8px;
+  }
+
+  .result-name {
+    font-size: 15px;
+  }
+
+  .result-coords {
+    font-size: 12px;
+  }
+
+  .stat-card {
+    padding: 14px;
+  }
+
+  .stat-label {
+    font-size: 12px;
+  }
+
+  .stat-value {
+    font-size: 18px;
+  }
+
+  .btn {
+    padding: 14px 14px;
+    font-size: 15px;
+    border-radius: 10px;
+  }
+
+  .speed-row {
+    gap: 8px;
+  }
+
+  .speed-label {
+    font-size: 13px;
+  }
+
+  .speed-btn {
+    padding: 9px 13px;
+    font-size: 13px;
+    border-radius: 8px;
+    min-width: 48px;
+  }
+
+  .progress-track {
+    height: 10px;
+  }
+
+  .progress-label {
+    font-size: 13px;
+    min-width: 40px;
+  }
+
+  .current-info {
+    padding: 14px;
+    font-size: 13px;
+  }
+
+  .current-title {
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+
+  .top-store-item {
+    padding: 14px 12px;
+    border-radius: 10px;
+  }
+
+  .rank-badge {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+  }
+
+  .top-store-name {
+    font-size: 15px;
+  }
+
+  .top-store-distance {
+    font-size: 12px;
+    margin-top: 3px;
+  }
+
+  .store-details > div {
+    font-size: 14px;
+    padding-bottom: 8px;
+  }
+
+  .store-name {
+    font-size: 20px;
+  }
+
+  .hint {
+    font-size: 12px;
+  }
+
+  .focused-store {
+    padding: 16px;
+  }
+
+  .focused-name {
+    font-size: 19px;
+  }
+
+  .focused-details > div {
+    font-size: 13px;
   }
 }
 </style>

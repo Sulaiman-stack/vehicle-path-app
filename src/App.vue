@@ -7,6 +7,7 @@
     - Compute top 5 closest stores to the path
     - Manage playback state (current index, playing flag, speed)
     - Manage store search/filter and store selection
+    - Manage mobile sidebar visibility (collapsible on small screens)
     - Render the OpenLayers map and the stats panel side-by-side
 -->
 <script setup>
@@ -49,6 +50,10 @@ let playbackTimer = null;
 const searchQuery = ref('');
 const selectedStore = ref(null);
 
+/* Mobile sidebar visibility */
+const sidebarOpen = ref(true);
+const isMobile = ref(false);
+
 /* ------------------------------------------------------------------ */
 /* Data loading                                                       */
 /* ------------------------------------------------------------------ */
@@ -85,7 +90,22 @@ async function loadStores() {
     .filter((s) => s.name && !isNaN(s.latitude) && !isNaN(s.longitude));
 }
 
+/* ------------------------------------------------------------------ */
+/* Mobile detection                                                  */
+/* ------------------------------------------------------------------ */
+
+function checkMobile() {
+  isMobile.value = window.matchMedia('(max-width: 768px)').matches;
+
+  if (!isMobile.value) {
+    sidebarOpen.value = true;
+  }
+}
+
 onMounted(async () => {
+  checkMobile();
+  window.addEventListener('resize', checkMobile);
+
   try {
     const [p, s] = await Promise.all([loadPath(), loadStores()]);
     path.value = p;
@@ -100,6 +120,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (playbackTimer) clearInterval(playbackTimer);
+  window.removeEventListener('resize', checkMobile);
 });
 
 /* ------------------------------------------------------------------ */
@@ -141,10 +162,21 @@ const filteredStores = computed(() => {
 function selectStore(store) {
   selectedStore.value = store;
   console.log('Selected store:', store.name);
+  if (isMobile.value) {
+    sidebarOpen.value = false;
+  }
 }
 
 function clearSelection() {
   selectedStore.value = null;
+}
+
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value;
+}
+
+function closeSidebar() {
+  sidebarOpen.value = false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -207,6 +239,9 @@ function onFeatureClick(payload) {
 
   if (payload.kind === 'store' || payload.kind === 'closest-store') {
     selectedStore.value = payload.data;
+    if (isMobile.value) {
+      sidebarOpen.value = false;
+    }
   }
 }
 </script>
@@ -231,26 +266,33 @@ function onFeatureClick(payload) {
 
     <!-- Main UI -->
     <template v-else>
-      <StatsPanel
-        :total-distance-km="totalKm"
-        :max-speed="topSpeed"
-        :first-proximity-ts="proximityTs"
-        :closest-store="closestStore"
-        :top-closest-stores="topClosestStores"
-        :path="path"
-        :current-index="currentIndex"
-        :is-playing="isPlaying"
-        :playback-speed="playbackSpeed"
-        :search-query="searchQuery"
-        :filtered-stores="filteredStores"
-        :selected-store="selectedStore"
-        @toggle-playback="togglePlayback"
-        @reset-playback="resetPlayback"
-        @update:playback-speed="playbackSpeed = $event"
-        @update:search-query="searchQuery = $event"
-        @select-store="selectStore"
-        @clear-selection="clearSelection"
-      />
+      <div
+        class="sidebar-wrapper"
+        :class="{ closed: isMobile && !sidebarOpen }"
+      >
+        <StatsPanel
+          :total-distance-km="totalKm"
+          :max-speed="topSpeed"
+          :first-proximity-ts="proximityTs"
+          :closest-store="closestStore"
+          :top-closest-stores="topClosestStores"
+          :path="path"
+          :current-index="currentIndex"
+          :is-playing="isPlaying"
+          :playback-speed="playbackSpeed"
+          :search-query="searchQuery"
+          :filtered-stores="filteredStores"
+          :selected-store="selectedStore"
+          :show-close-button="isMobile"
+          @toggle-playback="togglePlayback"
+          @reset-playback="resetPlayback"
+          @update:playback-speed="playbackSpeed = $event"
+          @update:search-query="searchQuery = $event"
+          @select-store="selectStore"
+          @clear-selection="clearSelection"
+          @close-sidebar="closeSidebar"
+        />
+      </div>
 
       <main class="map-area">
         <MapView
@@ -260,7 +302,10 @@ function onFeatureClick(payload) {
           :current-index="currentIndex"
           :is-playing="isPlaying"
           :selected-store="selectedStore"
+          :show-sidebar-button="isMobile"
+          :sidebar-open="sidebarOpen"
           @feature-click="onFeatureClick"
+          @toggle-sidebar="toggleSidebar"
         />
       </main>
     </template>
@@ -274,6 +319,12 @@ function onFeatureClick(payload) {
   height: 100vh;
   overflow: hidden;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  position: relative;
+}
+
+.sidebar-wrapper {
+  transition: transform 0.25s ease, width 0.25s ease;
+  z-index: 20;
 }
 
 .map-area {
@@ -330,14 +381,36 @@ function onFeatureClick(payload) {
   }
 }
 
+/* Mobile: sidebar slides in from bottom */
 @media (max-width: 768px) {
   .app-layout {
-    flex-direction: column-reverse;
+    flex-direction: column;
+  }
+
+  .sidebar-wrapper {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #ffffff;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .sidebar-wrapper.closed {
+    transform: translateY(100%);
+    pointer-events: none;
   }
 
   .map-area {
-    flex: 1;
-    min-height: 300px;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    flex: none;
+    z-index: 1;
   }
 }
 </style>

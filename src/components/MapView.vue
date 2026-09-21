@@ -7,8 +7,10 @@
     - The currently selected store highlighted with an amber ring
     - An animated vehicle marker at the current playback index
     - A legend + Simple/Speed toggle
-    - Basemap switcher (Streets / Satellite / Terrain) — instant switching
+    - Basemap switcher (Streets / Satellite / Terrain)
+    - A ☰ button (top-left, mobile only) that toggles the sidebar
   Emits "feature-click" events when a path point or store marker is clicked.
+  Emits "toggle-sidebar" when the ☰ button is clicked.
 -->
 <script setup>
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue';
@@ -34,9 +36,11 @@ const props = defineProps({
   currentIndex: { type: Number, default: -1 },
   isPlaying: { type: Boolean, default: false },
   selectedStore: { type: Object, default: null },
+  showSidebarButton: { type: Boolean, default: false },
+  sidebarOpen: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(['feature-click']);
+const emit = defineEmits(['feature-click', 'toggle-sidebar']);
 
 const mapContainer = ref(null);
 const tooltipEl = ref(null);
@@ -54,6 +58,9 @@ const basemapLayers = {};
 const colorMode = ref('simple');
 const basemap = ref('streets');
 const PAN_DURATION_MS = 350;
+
+/* Performance: sample every N path points for hover targets */
+const HOVER_SAMPLE_RATE = 4;
 
 /* Available basemaps — all free, no API key required */
 const BASEMAPS = [
@@ -96,7 +103,7 @@ const pathStyle = new Style({
 
 const storeStyle = new Style({
   image: new CircleStyle({
-    radius: 7,
+    radius: 8,
     fill: new Fill({ color: '#10b981' }),
     stroke: new Stroke({ color: '#ffffff', width: 2 }),
   }),
@@ -104,7 +111,7 @@ const storeStyle = new Style({
 
 const closestStoreStyle = new Style({
   image: new CircleStyle({
-    radius: 11,
+    radius: 12,
     fill: new Fill({ color: '#ef4444' }),
     stroke: new Stroke({ color: '#ffffff', width: 3 }),
   }),
@@ -112,7 +119,7 @@ const closestStoreStyle = new Style({
 
 const selectedStoreHaloStyle = new Style({
   image: new CircleStyle({
-    radius: 20,
+    radius: 22,
     fill: new Fill({ color: 'rgba(245, 158, 11, 0.35)' }),
     stroke: new Stroke({ color: '#f59e0b', width: 2 }),
   }),
@@ -120,7 +127,7 @@ const selectedStoreHaloStyle = new Style({
 
 const selectedStoreInnerStyle = new Style({
   image: new CircleStyle({
-    radius: 10,
+    radius: 11,
     fill: new Fill({ color: '#f59e0b' }),
     stroke: new Stroke({ color: '#ffffff', width: 3 }),
   }),
@@ -128,7 +135,7 @@ const selectedStoreInnerStyle = new Style({
 
 const vehicleStyle = new Style({
   image: new CircleStyle({
-    radius: 9,
+    radius: 10,
     fill: new Fill({ color: '#8b5cf6' }),
     stroke: new Stroke({ color: '#ffffff', width: 3 }),
   }),
@@ -137,7 +144,7 @@ const vehicleStyle = new Style({
 
 const hoverPointStyle = new Style({
   image: new CircleStyle({
-    radius: 14,
+    radius: 16,
     fill: new Fill({ color: 'transparent' }),
   }),
 });
@@ -156,18 +163,43 @@ function buildPathFeatures(path) {
   });
   lineFeature.setStyle(pathStyle);
 
-  const hoverPoints = path.map((p, idx) => {
+  const hoverPoints = buildHoverPoints(path);
+  return [lineFeature, ...hoverPoints];
+}
+
+/**
+ * Sample every Nth point for hover targets.
+ * Reduces feature count dramatically (e.g. 1190 → ~300) which is
+ * the single biggest performance win, especially on mobile.
+ */
+function buildHoverPoints(path) {
+  if (!path?.length) return [];
+  const out = [];
+  for (let i = 0; i < path.length; i += HOVER_SAMPLE_RATE) {
+    const p = path[i];
     const f = new Feature({
       geometry: new Point(fromLonLat([p.longitude, p.latitude])),
       kind: 'path-point',
       data: p,
-      index: idx,
+      index: i,
     });
     f.setStyle(hoverPointStyle);
-    return f;
-  });
-
-  return [lineFeature, ...hoverPoints];
+    out.push(f);
+  }
+  // Always include the last point too
+  const lastIdx = path.length - 1;
+  if (lastIdx % HOVER_SAMPLE_RATE !== 0) {
+    const p = path[lastIdx];
+    const f = new Feature({
+      geometry: new Point(fromLonLat([p.longitude, p.latitude])),
+      kind: 'path-point',
+      data: p,
+      index: lastIdx,
+    });
+    f.setStyle(hoverPointStyle);
+    out.push(f);
+  }
+  return out;
 }
 
 function buildSpeedSegments(path) {
@@ -204,19 +236,6 @@ function buildSpeedSegments(path) {
   }
 
   return features;
-}
-
-function buildHoverPoints(path) {
-  return path.map((p, idx) => {
-    const f = new Feature({
-      geometry: new Point(fromLonLat([p.longitude, p.latitude])),
-      kind: 'path-point',
-      data: p,
-      index: idx,
-    });
-    f.setStyle(hoverPointStyle);
-    return f;
-  });
 }
 
 function buildStoreFeatures(stores, closestStore) {
@@ -308,10 +327,6 @@ function panToSelectedStore() {
   });
 }
 
-/**
- * Show the currently-selected basemap layer and hide the others.
- * Since all layers are pre-created, this is instant.
- */
 function applyBasemap() {
   for (const id in basemapLayers) {
     basemapLayers[id].setVisible(id === basemap.value);
@@ -399,17 +414,15 @@ function initMap() {
   const highlightLayer = new VectorLayer({ source: highlightSource, zIndex: 15 });
   const vehicleLayer = new VectorLayer({ source: vehicleSource, zIndex: 10 });
 
-  // Pre-create all basemap layers (zIndex 0, only the active one is visible)
   BASEMAPS.forEach((b) => {
     const layer = new TileLayer({
       source: b.create(),
       zIndex: 0,
-      visible: false,     // will be turned on below
+      visible: false,
     });
     basemapLayers[b.id] = layer;
   });
 
-  // Build the layer stack: all basemaps (bottom), then our overlays
   const baseLayersList = Object.values(basemapLayers);
 
   overlay = new Overlay({
@@ -442,7 +455,7 @@ function initMap() {
     const feature = map.forEachFeatureAtPixel(
       evt.pixel,
       (f) => f,
-      { hitTolerance: 15 }
+      { hitTolerance: 20 }
     );
 
     if (
@@ -467,7 +480,7 @@ function initMap() {
     const feature = map.forEachFeatureAtPixel(
       evt.pixel,
       (f) => f,
-      { hitTolerance: 15 }
+      { hitTolerance: 20 }
     );
     if (!feature) return;
 
@@ -569,7 +582,23 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
     <div ref="mapContainer" class="map-container"></div>
     <div ref="tooltipEl" class="map-tooltip"></div>
 
-    <div class="color-toggle">
+    <!-- Sidebar toggle button (mobile only) -->
+    <button
+      v-if="showSidebarButton"
+      class="sidebar-toggle"
+      :class="{ open: sidebarOpen }"
+      @click="emit('toggle-sidebar')"
+      :aria-label="sidebarOpen ? 'Hide panel' : 'Show panel'"
+    >
+      <span v-if="sidebarOpen">✕</span>
+      <span v-else>☰</span>
+    </button>
+
+    <!-- Color mode toggle (top-left) -->
+    <div
+      class="color-toggle"
+      :class="{ 'mobile-offset': showSidebarButton }"
+    >
       <button
         :class="['toggle-btn', { active: colorMode === 'simple' }]"
         @click="colorMode = 'simple'"
@@ -580,6 +609,7 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
       >Speed</button>
     </div>
 
+    <!-- Basemap selector (top-right) -->
     <div class="basemap-toggle">
       <label class="basemap-label">Basemap</label>
       <select v-model="basemap" class="basemap-select">
@@ -589,6 +619,7 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
       </select>
     </div>
 
+    <!-- Legend (bottom-left) -->
     <div class="map-legend">
       <div class="legend-title">Legend</div>
 
@@ -661,6 +692,45 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
   max-width: 240px;
 }
 
+/* ---------------- Sidebar toggle (mobile only) ---------------- */
+
+.sidebar-toggle {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 40px;
+  height: 40px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  font-size: 18px;
+  cursor: pointer;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  color: #111827;
+}
+
+.sidebar-toggle:hover {
+  background: #f3f4f6;
+}
+
+.sidebar-toggle.open {
+  background: #3b82f6;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+.color-toggle.mobile-offset {
+  top: 12px;
+  left: 60px; /* leave room for the ☰ button */
+}
+
+/* ---------------- Color mode toggle ---------------- */
+
 .color-toggle {
   position: absolute;
   top: 12px;
@@ -698,6 +768,8 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
   background: #3b82f6;
   color: #ffffff;
 }
+
+/* ---------------- Basemap selector ---------------- */
 
 .basemap-toggle {
   position: absolute;
@@ -738,6 +810,8 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
 .basemap-select:focus {
   border-color: #3b82f6;
 }
+
+/* ---------------- Legend ---------------- */
 
 .map-legend {
   position: absolute;
@@ -825,5 +899,39 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
   background: #8b5cf6;
   width: 16px;
   height: 16px;
+}
+
+/* ---------------- Mobile tweaks ---------------- */
+
+@media (max-width: 768px) {
+  .map-legend {
+    font-size: 11px;
+    padding: 10px 12px;
+    min-width: 120px;
+    bottom: 12px;
+    left: 12px;
+    max-height: 40vh;
+    overflow: auto;
+  }
+
+  .basemap-toggle {
+    top: 12px;
+    right: 12px;
+    padding: 3px 6px;
+  }
+
+  .basemap-label {
+    display: none;
+  }
+
+  .basemap-select {
+    font-size: 11px;
+    padding: 3px 4px;
+  }
+
+  .toggle-btn {
+    padding: 5px 9px;
+    font-size: 11px;
+  }
 }
 </style>
