@@ -4,9 +4,9 @@
     - The vehicle's GPS path (single-color line OR multi-colored by speed)
     - All store locations (as markers)
     - The closest store highlighted differently
+    - The currently selected store highlighted with an amber ring
     - An animated vehicle marker at the current playback index
-    - A legend box explaining colors
-    - A toggle to switch between simple and speed-colored path
+    - A legend + Simple/Speed toggle
   Emits "feature-click" events when a path point or store marker is clicked.
 -->
 <script setup>
@@ -31,6 +31,7 @@ const props = defineProps({
   closestStore: { type: Object, default: null },
   currentIndex: { type: Number, default: -1 },
   isPlaying: { type: Boolean, default: false },
+  selectedStore: { type: Object, default: null },
 });
 
 const emit = defineEmits(['feature-click']);
@@ -42,10 +43,14 @@ let overlay = null;
 let pathSource = null;
 let storesSource = null;
 let vehicleSource = null;
+let highlightSource = null;
 let vehicleFeature = null;
 
-/* Color mode: 'simple' = single blue line, 'speed' = multi-colored by speed */
+/* Color mode */
 const colorMode = ref('simple');
+
+/* Pan animation duration (ms) */
+const PAN_DURATION_MS = 350;
 
 /* ------------------------------------------------------------------ */
 /* Styles                                                            */
@@ -71,6 +76,24 @@ const closestStoreStyle = new Style({
   }),
 });
 
+/* Selected store highlight — AMBER/GOLD so it stands apart from the
+   purple vehicle marker and red closest store. */
+const selectedStoreHaloStyle = new Style({
+  image: new CircleStyle({
+    radius: 20,
+    fill: new Fill({ color: 'rgba(245, 158, 11, 0.35)' }),
+    stroke: new Stroke({ color: '#f59e0b', width: 2 }),
+  }),
+});
+
+const selectedStoreInnerStyle = new Style({
+  image: new CircleStyle({
+    radius: 10,
+    fill: new Fill({ color: '#f59e0b' }),
+    stroke: new Stroke({ color: '#ffffff', width: 3 }),
+  }),
+});
+
 const vehicleStyle = new Style({
   image: new CircleStyle({
     radius: 9,
@@ -80,7 +103,6 @@ const vehicleStyle = new Style({
   zIndex: 10,
 });
 
-/* Bigger invisible hit targets for hover (radius 14px instead of 6px) */
 const hoverPointStyle = new Style({
   image: new CircleStyle({
     radius: 14,
@@ -215,6 +237,45 @@ function updateVehicleFeature() {
   }
 }
 
+function updateSelectionHighlight() {
+  if (!map) return;
+
+  highlightSource.clear();
+
+  if (!props.selectedStore) return;
+
+  const s = props.selectedStore;
+
+  const halo = new Feature({
+    geometry: new Point(fromLonLat([s.longitude, s.latitude])),
+    kind: 'selected-halo',
+  });
+  halo.setStyle(selectedStoreHaloStyle);
+
+  const inner = new Feature({
+    geometry: new Point(fromLonLat([s.longitude, s.latitude])),
+    kind: 'selected-inner',
+  });
+  inner.setStyle(selectedStoreInnerStyle);
+
+  highlightSource.addFeature(halo);
+  highlightSource.addFeature(inner);
+}
+
+function panToSelectedStore() {
+  if (!map || !props.selectedStore) return;
+
+  const s = props.selectedStore;
+  const coord = fromLonLat([s.longitude, s.latitude]);
+  const view = map.getView();
+
+  view.animate({
+    center: coord,
+    zoom: 14,
+    duration: PAN_DURATION_MS,
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Tooltip                                                           */
 /* ------------------------------------------------------------------ */
@@ -289,9 +350,11 @@ function initMap() {
   pathSource = new VectorSource();
   storesSource = new VectorSource();
   vehicleSource = new VectorSource();
+  highlightSource = new VectorSource();
 
   const pathLayer = new VectorLayer({ source: pathSource });
   const storesLayer = new VectorLayer({ source: storesSource });
+  const highlightLayer = new VectorLayer({ source: highlightSource, zIndex: 15 });
   const vehicleLayer = new VectorLayer({ source: vehicleSource });
 
   overlay = new Overlay({
@@ -307,6 +370,7 @@ function initMap() {
       new TileLayer({ source: new OSM() }),
       pathLayer,
       storesLayer,
+      highlightLayer,
       vehicleLayer,
     ],
     overlays: [overlay],
@@ -324,7 +388,12 @@ function initMap() {
       { hitTolerance: 15 }
     );
 
-    if (feature && feature.get('kind') !== 'path') {
+    if (
+      feature &&
+      feature.get('kind') !== 'path' &&
+      feature.get('kind') !== 'selected-halo' &&
+      feature.get('kind') !== 'selected-inner'
+    ) {
       showTooltip(formatFeatureHtml(feature), evt.coordinate);
       map.getTargetElement().style.cursor = 'pointer';
     } else {
@@ -376,12 +445,9 @@ function renderData() {
   pathSource.clear();
 
   if (colorMode.value === 'speed') {
-    // Multi-colored segments + invisible hover points
-    const segments = buildSpeedSegments(props.path);
-    pathSource.addFeatures(segments);
+    pathSource.addFeatures(buildSpeedSegments(props.path));
     pathSource.addFeatures(buildHoverPoints(props.path));
   } else {
-    // Single blue line + hover points
     pathSource.addFeatures(buildPathFeatures(props.path));
   }
 
@@ -400,6 +466,8 @@ function renderData() {
       });
     }
   }
+
+  updateSelectionHighlight();
 }
 
 onMounted(() => {
@@ -425,6 +493,13 @@ watch(() => props.isPlaying, (playing) => {
 
 watch(colorMode, () => {
   renderData();
+});
+
+watch(() => props.selectedStore, (newVal, oldVal) => {
+  updateSelectionHighlight();
+  if (newVal && newVal !== oldVal) {
+    panToSelectedStore();
+  }
 });
 </script>
 
@@ -480,6 +555,10 @@ watch(colorMode, () => {
         <span>Closest store ⭐</span>
       </div>
       <div class="legend-item">
+        <span class="legend-swatch selected"></span>
+        <span>Selected store</span>
+      </div>
+      <div class="legend-item">
         <span class="legend-swatch vehicle"></span>
         <span>Vehicle (current)</span>
       </div>
@@ -513,8 +592,6 @@ watch(colorMode, () => {
   z-index: 1000;
   max-width: 240px;
 }
-
-/* ---------------- Color mode toggle ---------------- */
 
 .color-toggle {
   position: absolute;
@@ -553,8 +630,6 @@ watch(colorMode, () => {
   background: #3b82f6;
   color: #ffffff;
 }
-
-/* ---------------- Legend ---------------- */
 
 .map-legend {
   position: absolute;
@@ -629,6 +704,14 @@ watch(colorMode, () => {
   background: #ef4444;
   width: 16px;
   height: 16px;
+}
+
+/* AMBER swatch for the selected store */
+.legend-swatch.selected {
+  background: #f59e0b;
+  width: 16px;
+  height: 16px;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.35);
 }
 
 .legend-swatch.vehicle {

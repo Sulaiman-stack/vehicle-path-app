@@ -2,11 +2,12 @@
 <!--
   Side panel showing:
     1. Store search box + filtered results
-    2. Trip statistics: distance, max speed, duration, path point count
-    3. Playback controls: Play/Pause, Reset, speed multiplier, progress bar
-    4. Live "current position" info during playback
-    5. Top 5 closest stores ranked list
-    6. Detailed info for the single closest store
+    2. Focused store card (when a store is selected)
+    3. Trip statistics: distance, max speed, duration, path point count
+    4. Playback controls: Play/Pause, Reset, speed multiplier, progress bar
+    5. Live "current position" info during playback
+    6. Top 5 closest stores ranked list
+    7. Detailed info for the single closest store
 -->
 <script setup>
 import { computed } from 'vue';
@@ -21,7 +22,6 @@ const props = defineProps({
   currentIndex: { type: Number, default: -1 },
   isPlaying: { type: Boolean, default: false },
   playbackSpeed: { type: Number, default: 5 },
-  // Search & selection
   searchQuery: { type: String, default: '' },
   filteredStores: { type: Array, default: () => [] },
   selectedStore: { type: Object, default: null },
@@ -57,30 +57,33 @@ const tripDuration = computed(() => {
   return `${h}h ${m}m`;
 });
 
-/* Number of path points, for context. */
 const pointCount = computed(() => props.path?.length ?? 0);
 
-/* Current playback point (or null if not playing yet). */
 const currentPoint = computed(() => {
   const i = props.currentIndex;
   if (i < 0 || i >= props.path.length) return null;
   return props.path[i];
 });
 
-/* Playback progress as a 0-100 percentage. */
 const progressPct = computed(() => {
   if (!props.path.length) return 0;
   if (props.currentIndex < 0) return 0;
   return Math.round(((props.currentIndex + 1) / props.path.length) * 100);
 });
 
-/* Speed multiplier options shown as buttons. */
 const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
 
-/* Whether the search input has any text. */
 const hasQuery = computed(() => props.searchQuery.trim().length > 0);
 
-/* Search input handlers */
+/* Distance of the currently-selected store to the path (if it's the closest). */
+const selectedDistanceKm = computed(() => {
+  if (!props.selectedStore || !props.closestStore) return null;
+  if (props.selectedStore.name === props.closestStore.store.name) {
+    return props.closestStore.distanceKm;
+  }
+  return null;
+});
+
 function onSearchInput(e) {
   emit('update:search-query', e.target.value);
 }
@@ -120,7 +123,6 @@ function clearSearch() {
         </button>
       </div>
 
-      <!-- Results -->
       <div v-if="hasQuery" class="search-results">
         <div v-if="filteredStores.length === 0" class="search-empty">
           No stores match "{{ searchQuery }}"
@@ -139,13 +141,41 @@ function clearSearch() {
         </button>
       </div>
 
-      <!-- Currently selected store chip -->
       <div v-if="selectedStore" class="selected-chip">
         <span>📍 {{ selectedStore.name }}</span>
-        <button class="chip-close" @click="emit('clear-selection')" aria-label="Clear selection">
+        <button
+          class="chip-close"
+          @click="emit('clear-selection')"
+          aria-label="Clear selection"
+        >
           ×
         </button>
       </div>
+    </section>
+
+    <!-- ============= Focused store card ============= -->
+    <section v-if="selectedStore" class="focused-store">
+      <h2>Focused Store</h2>
+      <div class="focused-name">{{ selectedStore.name }}</div>
+
+      <dl class="focused-details">
+        <div>
+          <dt>Latitude</dt>
+          <dd>{{ selectedStore.latitude.toFixed(5) }}</dd>
+        </div>
+        <div>
+          <dt>Longitude</dt>
+          <dd>{{ selectedStore.longitude.toFixed(5) }}</dd>
+        </div>
+        <div v-if="selectedDistanceKm !== null">
+          <dt>Distance to path</dt>
+          <dd>{{ selectedDistanceKm.toFixed(3) }} km</dd>
+        </div>
+      </dl>
+
+      <button class="btn clear-btn" @click="emit('clear-selection')">
+        ✕ Clear focus
+      </button>
     </section>
 
     <!-- ============= Key stats ============= -->
@@ -236,6 +266,7 @@ function clearSearch() {
           :key="item.store.name + idx"
           class="top-store-item"
           :class="{ primary: idx === 0 }"
+          @click="emit('select-store', item.store)"
         >
           <div class="rank-badge">{{ idx + 1 }}</div>
           <div class="top-store-info">
@@ -311,7 +342,7 @@ function clearSearch() {
   color: #6b7280;
 }
 
-/* =================== Search section =================== */
+/* =================== Search =================== */
 
 .search-section {
   margin-bottom: 20px;
@@ -386,7 +417,6 @@ function clearSearch() {
   color: #111827;
 }
 
-/* Results */
 .search-results {
   margin-top: 8px;
   display: flex;
@@ -445,7 +475,6 @@ function clearSearch() {
   font-style: italic;
 }
 
-/* Selected store chip */
 .selected-chip {
   margin-top: 10px;
   display: flex;
@@ -473,6 +502,69 @@ function clearSearch() {
 
 .chip-close:hover {
   color: #5b21b6;
+}
+
+/* =================== Focused store =================== */
+
+.focused-store {
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 20px;
+}
+
+.focused-store h2 {
+  font-size: 12px;
+  font-weight: 700;
+  color: #6d28d9;
+  margin: 0 0 8px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.focused-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: #5b21b6;
+  margin-bottom: 10px;
+}
+
+.focused-details {
+  margin: 0 0 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.focused-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.focused-details dt {
+  color: #7c3aed;
+  margin: 0;
+}
+
+.focused-details dd {
+  color: #4c1d95;
+  font-weight: 600;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.clear-btn {
+  width: 100%;
+  background: #ffffff;
+  border-color: #c4b5fd;
+  color: #6d28d9;
+}
+
+.clear-btn:hover {
+  background: #f3e8ff;
 }
 
 /* =================== Stat cards =================== */
@@ -608,7 +700,6 @@ function clearSearch() {
   font-weight: 600;
 }
 
-/* Progress bar */
 .progress-wrap {
   display: flex;
   align-items: center;
@@ -640,7 +731,6 @@ function clearSearch() {
   font-variant-numeric: tabular-nums;
 }
 
-/* Current position */
 .current-info {
   background: #f9fafb;
   border: 1px solid #e5e7eb;
@@ -691,6 +781,13 @@ function clearSearch() {
   background: #f9fafb;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.top-store-item:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
 }
 
 .top-store-item.primary {
@@ -799,7 +896,7 @@ function clearSearch() {
   line-height: 1.4;
 }
 
-/* =================== Mobile responsive =================== */
+/* =================== Mobile =================== */
 
 @media (max-width: 768px) {
   .stats-panel {

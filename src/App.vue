@@ -26,14 +26,8 @@ import {
 /* Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-// Proximity threshold: how close the vehicle must get to the store
-// to be considered "arrived near it". 5 km works well for this dataset.
 const PROXIMITY_THRESHOLD_KM = 5.0;
-
-// Playback timer interval (ms).
 const PLAYBACK_TICK_MS = 50;
-
-// How many closest stores to display in the sidebar list.
 const TOP_STORES_COUNT = 5;
 
 /* ------------------------------------------------------------------ */
@@ -45,15 +39,13 @@ const stores = ref([]);
 const loading = ref(true);
 const error = ref(null);
 
-/* ---------------- Playback state ---------------- */
-
+/* Playback state */
 const currentIndex = ref(-1);
 const isPlaying = ref(false);
 const playbackSpeed = ref(5);
 let playbackTimer = null;
 
-/* ---------------- Search & selection state ---------------- */
-
+/* Search & selection state */
 const searchQuery = ref('');
 const selectedStore = ref(null);
 
@@ -115,14 +107,12 @@ onBeforeUnmount(() => {
 /* ------------------------------------------------------------------ */
 
 const totalKm = computed(() => totalDistanceKm(path.value));
-
 const topSpeed = computed(() => maxSpeed(path.value));
 
 const closestStore = computed(() =>
   findClosestStore(stores.value, path.value)
 );
 
-/* Top N closest stores — used for the sidebar ranking list. */
 const topClosestStores = computed(() =>
   findTopNClosestStores(stores.value, path.value, TOP_STORES_COUNT)
 );
@@ -136,7 +126,6 @@ const proximityTs = computed(() => {
   );
 });
 
-/* Filtered stores based on the search query. */
 const filteredStores = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
   if (!q) return [];
@@ -207,7 +196,7 @@ function togglePlayback() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Feature click feedback (bonus)                                     */
+/* Feature click feedback                                             */
 /* ------------------------------------------------------------------ */
 
 const lastClick = ref(null);
@@ -216,7 +205,6 @@ function onFeatureClick(payload) {
   lastClick.value = payload;
   console.log('Clicked feature:', payload);
 
-  // If the user clicked a store on the map, sync selection with it
   if (payload.kind === 'store' || payload.kind === 'closest-store') {
     selectedStore.value = payload.data;
   }
@@ -271,6 +259,7 @@ function onFeatureClick(payload) {
           :closest-store="closestStore"
           :current-index="currentIndex"
           :is-playing="isPlaying"
+          :selected-store="selectedStore"
           @feature-click="onFeatureClick"
         />
       </main>
@@ -292,8 +281,6 @@ function onFeatureClick(payload) {
   min-width: 0;
   position: relative;
 }
-
-/* ---------------- Loading & error screens ---------------- */
 
 .loading-screen,
 .error-screen {
@@ -342,8 +329,6 @@ function onFeatureClick(payload) {
     transform: rotate(360deg);
   }
 }
-
-/* ---------------- Responsive layout ---------------- */
 
 @media (max-width: 768px) {
   .app-layout {
