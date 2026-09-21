@@ -1,10 +1,12 @@
 <!-- src/components/StatsPanel.vue -->
 <!--
   Side panel showing:
-    1. Trip statistics: distance, max speed, duration, path point count
-    2. Closest store info: name, distance to path, first proximity time
-    3. Playback controls: Play/Pause, Reset, speed multiplier
+    1. Store search box + filtered results
+    2. Trip statistics: distance, max speed, duration, path point count
+    3. Playback controls: Play/Pause, Reset, speed multiplier, progress bar
     4. Live "current position" info during playback
+    5. Top 5 closest stores ranked list
+    6. Detailed info for the single closest store
 -->
 <script setup>
 import { computed } from 'vue';
@@ -14,17 +16,24 @@ const props = defineProps({
   maxSpeed: { type: Number, default: 0 },
   firstProximityTs: { type: Number, default: null },
   closestStore: { type: Object, default: null },
+  topClosestStores: { type: Array, default: () => [] },
   path: { type: Array, default: () => [] },
-  // Playback state (from App.vue)
   currentIndex: { type: Number, default: -1 },
   isPlaying: { type: Boolean, default: false },
-  playbackSpeed: { type: Number, default: 60 },
+  playbackSpeed: { type: Number, default: 5 },
+  // Search & selection
+  searchQuery: { type: String, default: '' },
+  filteredStores: { type: Array, default: () => [] },
+  selectedStore: { type: Object, default: null },
 });
 
 const emit = defineEmits([
   'toggle-playback',
   'reset-playback',
   'update:playback-speed',
+  'update:search-query',
+  'select-store',
+  'clear-selection',
 ]);
 
 /* Format a Unix-seconds timestamp into a friendly local string. */
@@ -58,8 +67,27 @@ const currentPoint = computed(() => {
   return props.path[i];
 });
 
+/* Playback progress as a 0-100 percentage. */
+const progressPct = computed(() => {
+  if (!props.path.length) return 0;
+  if (props.currentIndex < 0) return 0;
+  return Math.round(((props.currentIndex + 1) / props.path.length) * 100);
+});
+
 /* Speed multiplier options shown as buttons. */
 const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
+
+/* Whether the search input has any text. */
+const hasQuery = computed(() => props.searchQuery.trim().length > 0);
+
+/* Search input handlers */
+function onSearchInput(e) {
+  emit('update:search-query', e.target.value);
+}
+
+function clearSearch() {
+  emit('update:search-query', '');
+}
 </script>
 
 <template>
@@ -69,7 +97,58 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
       <p class="subtitle">Vehicle path analysis</p>
     </header>
 
-    <!-- Key stats -->
+    <!-- ============= Store search ============= -->
+    <section class="search-section">
+      <h2>Find a Store</h2>
+
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input
+          type="text"
+          class="search-input"
+          placeholder="Search store name…"
+          :value="searchQuery"
+          @input="onSearchInput"
+        />
+        <button
+          v-if="hasQuery"
+          class="search-clear"
+          @click="clearSearch"
+          aria-label="Clear search"
+        >
+          ×
+        </button>
+      </div>
+
+      <!-- Results -->
+      <div v-if="hasQuery" class="search-results">
+        <div v-if="filteredStores.length === 0" class="search-empty">
+          No stores match "{{ searchQuery }}"
+        </div>
+        <button
+          v-for="store in filteredStores"
+          :key="store.name + store.latitude"
+          class="search-result"
+          :class="{ active: selectedStore && selectedStore.name === store.name }"
+          @click="emit('select-store', store)"
+        >
+          <span class="result-name">{{ store.name }}</span>
+          <span class="result-coords">
+            {{ store.latitude.toFixed(3) }}, {{ store.longitude.toFixed(3) }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Currently selected store chip -->
+      <div v-if="selectedStore" class="selected-chip">
+        <span>📍 {{ selectedStore.name }}</span>
+        <button class="chip-close" @click="emit('clear-selection')" aria-label="Clear selection">
+          ×
+        </button>
+      </div>
+    </section>
+
+    <!-- ============= Key stats ============= -->
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-icon">📏</div>
@@ -106,7 +185,7 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
       </div>
     </div>
 
-    <!-- Playback controls -->
+    <!-- ============= Playback ============= -->
     <section class="playback">
       <h2>Playback</h2>
 
@@ -130,7 +209,16 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
         </button>
       </div>
 
-      <!-- Live current position during playback -->
+      <div class="progress-wrap">
+        <div class="progress-track">
+          <div
+            class="progress-fill"
+            :style="{ width: progressPct + '%' }"
+          ></div>
+        </div>
+        <div class="progress-label">{{ progressPct }}%</div>
+      </div>
+
       <div v-if="currentPoint" class="current-info">
         <div class="current-title">🚗 Current position</div>
         <div><b>Time:</b> {{ formatTs(currentPoint.timeStamp) }}</div>
@@ -139,9 +227,33 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
       </div>
     </section>
 
-    <!-- Closest store section -->
+    <!-- ============= Top 5 closest stores ============= -->
+    <section class="top-stores" v-if="topClosestStores.length">
+      <h2>Top {{ topClosestStores.length }} Closest Stores</h2>
+      <ol class="top-stores-list">
+        <li
+          v-for="(item, idx) in topClosestStores"
+          :key="item.store.name + idx"
+          class="top-store-item"
+          :class="{ primary: idx === 0 }"
+        >
+          <div class="rank-badge">{{ idx + 1 }}</div>
+          <div class="top-store-info">
+            <div class="top-store-name">
+              {{ item.store.name }}
+              <span v-if="idx === 0" class="star">⭐</span>
+            </div>
+            <div class="top-store-distance">
+              {{ item.distanceKm.toFixed(3) }} km from path
+            </div>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ============= Closest store detail ============= -->
     <section class="closest-store" v-if="closestStore">
-      <h2>Closest Store to Path</h2>
+      <h2>Closest Store — Details</h2>
       <div class="store-name">⭐ {{ closestStore.store.name }}</div>
 
       <dl class="store-details">
@@ -199,7 +311,171 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
   color: #6b7280;
 }
 
-/* ---------------- Stat cards ---------------- */
+/* =================== Search section =================== */
+
+.search-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.search-section h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 12px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.search-box:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.search-icon {
+  font-size: 13px;
+  color: #9ca3af;
+  margin-right: 6px;
+}
+
+.search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 10px 0;
+  font-size: 13px;
+  color: #111827;
+  outline: none;
+  font-family: inherit;
+}
+
+.search-input::placeholder {
+  color: #9ca3af;
+}
+
+.search-clear {
+  background: #e5e7eb;
+  border: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  cursor: pointer;
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.search-clear:hover {
+  background: #d1d5db;
+  color: #111827;
+}
+
+/* Results */
+.search-results {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.search-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.search-result:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.search-result.active {
+  background: #dbeafe;
+  border-color: #3b82f6;
+}
+
+.result-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-coords {
+  font-size: 11px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.search-empty {
+  font-size: 12px;
+  color: #9ca3af;
+  padding: 12px 8px;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Selected store chip */
+.selected-chip {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: #ede9fe;
+  border: 1px solid #c4b5fd;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #5b21b6;
+  font-weight: 500;
+}
+
+.chip-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: #7c3aed;
+  padding: 0 2px;
+}
+
+.chip-close:hover {
+  color: #5b21b6;
+}
+
+/* =================== Stat cards =================== */
 
 .stat-grid {
   display: grid;
@@ -250,7 +526,7 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
   margin-left: 2px;
 }
 
-/* ---------------- Playback controls ---------------- */
+/* =================== Playback =================== */
 
 .playback {
   margin-bottom: 24px;
@@ -304,7 +580,7 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
 }
 
@@ -332,6 +608,39 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
   font-weight: 600;
 }
 
+/* Progress bar */
+.progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.progress-track {
+  flex: 1;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  border-radius: 999px;
+  transition: width 0.15s linear;
+}
+
+.progress-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #374151;
+  min-width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Current position */
 .current-info {
   background: #f9fafb;
   border: 1px solid #e5e7eb;
@@ -348,7 +657,96 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
   margin-bottom: 4px;
 }
 
-/* ---------------- Closest store ---------------- */
+/* =================== Top 5 stores =================== */
+
+.top-stores {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.top-stores h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 12px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.top-stores-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.top-store-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.top-store-item.primary {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.rank-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.top-store-item.primary .rank-badge {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.top-store-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.top-store-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-store-item.primary .top-store-name {
+  color: #b91c1c;
+}
+
+.top-store-distance {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.star {
+  font-size: 12px;
+  margin-left: 2px;
+}
+
+/* =================== Closest store detail =================== */
 
 .closest-store h2 {
   font-size: 14px;
@@ -401,7 +799,7 @@ const speedOptions = [1, 2, 5, 10, 30, 60, 120, 300];
   line-height: 1.4;
 }
 
-/* ---------------- Mobile responsive ---------------- */
+/* =================== Mobile responsive =================== */
 
 @media (max-width: 768px) {
   .stats-panel {

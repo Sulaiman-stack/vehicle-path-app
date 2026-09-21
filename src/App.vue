@@ -4,7 +4,9 @@
   Responsibilities:
     - Load PathTravelled.json and stores.csv from /public
     - Compute trip statistics (distance, max speed, closest store, first proximity)
+    - Compute top 5 closest stores to the path
     - Manage playback state (current index, playing flag, speed)
+    - Manage store search/filter and store selection
     - Render the OpenLayers map and the stats panel side-by-side
 -->
 <script setup>
@@ -16,6 +18,7 @@ import {
   totalDistanceKm,
   maxSpeed,
   findClosestStore,
+  findTopNClosestStores,
   firstProximityTimestamp,
 } from './utils/geo.js';
 
@@ -27,8 +30,11 @@ import {
 // to be considered "arrived near it". 5 km works well for this dataset.
 const PROXIMITY_THRESHOLD_KM = 5.0;
 
-// Playback timer interval (ms). 50ms = 20 updates/sec for smooth motion.
+// Playback timer interval (ms).
 const PLAYBACK_TICK_MS = 50;
+
+// How many closest stores to display in the sidebar list.
+const TOP_STORES_COUNT = 5;
 
 /* ------------------------------------------------------------------ */
 /* State                                                              */
@@ -41,10 +47,15 @@ const error = ref(null);
 
 /* ---------------- Playback state ---------------- */
 
-const currentIndex = ref(-1);      // which path point the vehicle is at (-1 = idle)
+const currentIndex = ref(-1);
 const isPlaying = ref(false);
-const playbackSpeed = ref(5);      // multiplier (5x default — gentle pace)
+const playbackSpeed = ref(5);
 let playbackTimer = null;
+
+/* ---------------- Search & selection state ---------------- */
+
+const searchQuery = ref('');
+const selectedStore = ref(null);
 
 /* ------------------------------------------------------------------ */
 /* Data loading                                                       */
@@ -62,7 +73,6 @@ async function loadStores() {
 
   const text = await res.text();
 
-  // NOTE: the file uses ';' as the delimiter (not ',').
   const parsed = Papa.parse(text, {
     header: true,
     delimiter: ';',
@@ -112,6 +122,11 @@ const closestStore = computed(() =>
   findClosestStore(stores.value, path.value)
 );
 
+/* Top N closest stores — used for the sidebar ranking list. */
+const topClosestStores = computed(() =>
+  findTopNClosestStores(stores.value, path.value, TOP_STORES_COUNT)
+);
+
 const proximityTs = computed(() => {
   if (!closestStore.value) return null;
   return firstProximityTimestamp(
@@ -121,8 +136,30 @@ const proximityTs = computed(() => {
   );
 });
 
+/* Filtered stores based on the search query. */
+const filteredStores = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return [];
+  return stores.value
+    .filter((s) => s.name.toLowerCase().includes(q))
+    .slice(0, 10);
+});
+
 /* ------------------------------------------------------------------ */
-/* Playback controls (tuned for smooth slow-motion)                   */
+/* Search & selection actions                                         */
+/* ------------------------------------------------------------------ */
+
+function selectStore(store) {
+  selectedStore.value = store;
+  console.log('Selected store:', store.name);
+}
+
+function clearSelection() {
+  selectedStore.value = null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Playback controls                                                  */
 /* ------------------------------------------------------------------ */
 
 function startPlayback() {
@@ -139,8 +176,6 @@ function startPlayback() {
 
   if (playbackTimer) clearInterval(playbackTimer);
 
-  // Step size scales with speed. At 1x, step is 1 (slowest possible).
-  // At 300x, step is 30 (fast blur).
   playbackTimer = setInterval(() => {
     const step = Math.max(1, Math.round(playbackSpeed.value / 10));
     currentIndex.value = Math.min(
@@ -180,6 +215,11 @@ const lastClick = ref(null);
 function onFeatureClick(payload) {
   lastClick.value = payload;
   console.log('Clicked feature:', payload);
+
+  // If the user clicked a store on the map, sync selection with it
+  if (payload.kind === 'store' || payload.kind === 'closest-store') {
+    selectedStore.value = payload.data;
+  }
 }
 </script>
 
@@ -208,13 +248,20 @@ function onFeatureClick(payload) {
         :max-speed="topSpeed"
         :first-proximity-ts="proximityTs"
         :closest-store="closestStore"
+        :top-closest-stores="topClosestStores"
         :path="path"
         :current-index="currentIndex"
         :is-playing="isPlaying"
         :playback-speed="playbackSpeed"
+        :search-query="searchQuery"
+        :filtered-stores="filteredStores"
+        :selected-store="selectedStore"
         @toggle-playback="togglePlayback"
         @reset-playback="resetPlayback"
         @update:playback-speed="playbackSpeed = $event"
+        @update:search-query="searchQuery = $event"
+        @select-store="selectStore"
+        @clear-selection="clearSelection"
       />
 
       <main class="map-area">

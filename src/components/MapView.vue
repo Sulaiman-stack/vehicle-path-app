@@ -5,6 +5,8 @@
     - All store locations (as markers)
     - The closest store highlighted differently
     - An animated vehicle marker at the current playback index
+    - A legend box explaining the colors
+    - Auto-following behavior during playback (map centers on the vehicle)
   Emits "feature-click" events when a path point or store marker is clicked.
 -->
 <script setup>
@@ -30,9 +32,8 @@ const props = defineProps({
   // The closest store object: { store, distanceKm } or null
   closestStore: { type: Object, default: null },
   // Index of the path point the vehicle is currently at (for animation)
-  // -1 means "not playing / no active position"
   currentIndex: { type: Number, default: -1 },
-  // Whether playback is active (used for hover behavior if needed)
+  // Whether playback is active
   isPlaying: { type: Boolean, default: false },
 });
 
@@ -281,7 +282,6 @@ function initMap() {
   });
 
   // Pointer move: always active — works during playback AND when paused.
-  // Increased hitTolerance so hovering the thin path is easier.
   map.on('pointermove', (evt) => {
     const feature = map.forEachFeatureAtPixel(
       evt.pixel,
@@ -387,12 +387,45 @@ watch(() => props.currentIndex, updateVehicleFeature);
 watch(() => props.isPlaying, (playing) => {
   if (!playing) hideTooltip();
 });
+
+// Follow the vehicle during playback: recenter the map on each tick.
+// Only does this when actively playing, so the user can freely pan when paused.
+watch(() => props.currentIndex, (idx) => {
+  if (!map) return;
+  if (!props.isPlaying) return;
+  if (idx < 0 || idx >= props.path.length) return;
+
+  const p = props.path[idx];
+  const coord = fromLonLat([p.longitude, p.latitude]);
+  map.getView().setCenter(coord);
+});
 </script>
 
 <template>
   <div class="map-wrapper">
     <div ref="mapContainer" class="map-container"></div>
     <div ref="tooltipEl" class="map-tooltip"></div>
+
+    <!-- Legend — floating box in the bottom-left of the map -->
+    <div class="map-legend">
+      <div class="legend-title">Legend</div>
+      <div class="legend-item">
+        <span class="legend-swatch path"></span>
+        <span>Vehicle path</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch store"></span>
+        <span>Store</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch closest"></span>
+        <span>Closest store ⭐</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-swatch vehicle"></span>
+        <span>Vehicle (current)</span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -421,5 +454,82 @@ watch(() => props.isPlaying, (playing) => {
   pointer-events: none;
   z-index: 1000;
   max-width: 240px;
+}
+
+/* ---------------- Map legend ---------------- */
+
+.map-legend {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  color: #374151;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 140px;
+}
+
+.legend-title {
+  font-weight: 700;
+  font-size: 11px;
+  color: #111827;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  line-height: 1.2;
+}
+
+.legend-item:last-child {
+  margin-bottom: 0;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px #d1d5db;
+}
+
+/* Line swatch for the path */
+.legend-swatch.path {
+  width: 16px;
+  height: 4px;
+  border-radius: 2px;
+  background: #3b82f6;
+  border: none;
+  box-shadow: none;
+}
+
+/* Colored dots for markers */
+.legend-swatch.store {
+  background: #10b981;
+}
+
+.legend-swatch.closest {
+  background: #ef4444;
+  width: 16px;
+  height: 16px;
+}
+
+.legend-swatch.vehicle {
+  background: #8b5cf6;
+  width: 16px;
+  height: 16px;
 }
 </style>
