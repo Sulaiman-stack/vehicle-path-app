@@ -7,6 +7,7 @@
     - The currently selected store highlighted with an amber ring
     - An animated vehicle marker at the current playback index
     - A legend + Simple/Speed toggle
+    - Basemap switcher (Streets / Satellite / Terrain) — instant switching
   Emits "feature-click" events when a path point or store marker is clicked.
 -->
 <script setup>
@@ -15,6 +16,7 @@ import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
 import OSM from 'ol/source/OSM';
+import XYZ from 'ol/source/XYZ';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import Feature from 'ol/Feature';
@@ -46,11 +48,43 @@ let vehicleSource = null;
 let highlightSource = null;
 let vehicleFeature = null;
 
-/* Color mode */
-const colorMode = ref('simple');
+/* Basemap layers (created once, toggled via visibility) */
+const basemapLayers = {};
 
-/* Pan animation duration (ms) */
+const colorMode = ref('simple');
+const basemap = ref('streets');
 const PAN_DURATION_MS = 350;
+
+/* Available basemaps — all free, no API key required */
+const BASEMAPS = [
+  {
+    id: 'streets',
+    label: 'Streets',
+    create: () => new OSM(),
+  },
+  {
+    id: 'satellite',
+    label: 'Satellite',
+    create: () =>
+      new XYZ({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attributions:
+          'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+        maxZoom: 19,
+      }),
+  },
+  {
+    id: 'terrain',
+    label: 'Terrain',
+    create: () =>
+      new XYZ({
+        url: 'https://tile.opentopomap.org/{z}/{x}/{y}.png',
+        attributions:
+          'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)',
+        maxZoom: 17,
+      }),
+  },
+];
 
 /* ------------------------------------------------------------------ */
 /* Styles                                                            */
@@ -76,8 +110,6 @@ const closestStoreStyle = new Style({
   }),
 });
 
-/* Selected store highlight — AMBER/GOLD so it stands apart from the
-   purple vehicle marker and red closest store. */
 const selectedStoreHaloStyle = new Style({
   image: new CircleStyle({
     radius: 20,
@@ -276,6 +308,16 @@ function panToSelectedStore() {
   });
 }
 
+/**
+ * Show the currently-selected basemap layer and hide the others.
+ * Since all layers are pre-created, this is instant.
+ */
+function applyBasemap() {
+  for (const id in basemapLayers) {
+    basemapLayers[id].setVisible(id === basemap.value);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Tooltip                                                           */
 /* ------------------------------------------------------------------ */
@@ -352,10 +394,23 @@ function initMap() {
   vehicleSource = new VectorSource();
   highlightSource = new VectorSource();
 
-  const pathLayer = new VectorLayer({ source: pathSource });
-  const storesLayer = new VectorLayer({ source: storesSource });
+  const pathLayer = new VectorLayer({ source: pathSource, zIndex: 5 });
+  const storesLayer = new VectorLayer({ source: storesSource, zIndex: 6 });
   const highlightLayer = new VectorLayer({ source: highlightSource, zIndex: 15 });
-  const vehicleLayer = new VectorLayer({ source: vehicleSource });
+  const vehicleLayer = new VectorLayer({ source: vehicleSource, zIndex: 10 });
+
+  // Pre-create all basemap layers (zIndex 0, only the active one is visible)
+  BASEMAPS.forEach((b) => {
+    const layer = new TileLayer({
+      source: b.create(),
+      zIndex: 0,
+      visible: false,     // will be turned on below
+    });
+    basemapLayers[b.id] = layer;
+  });
+
+  // Build the layer stack: all basemaps (bottom), then our overlays
+  const baseLayersList = Object.values(basemapLayers);
 
   overlay = new Overlay({
     element: tooltipEl.value,
@@ -367,7 +422,7 @@ function initMap() {
   map = new Map({
     target: mapContainer.value,
     layers: [
-      new TileLayer({ source: new OSM() }),
+      ...baseLayersList,
       pathLayer,
       storesLayer,
       highlightLayer,
@@ -380,6 +435,8 @@ function initMap() {
       zoom: 10,
     }),
   });
+
+  applyBasemap();
 
   map.on('pointermove', (evt) => {
     const feature = map.forEachFeatureAtPixel(
@@ -495,6 +552,10 @@ watch(colorMode, () => {
   renderData();
 });
 
+watch(basemap, () => {
+  applyBasemap();
+});
+
 watch(() => props.selectedStore, (newVal, oldVal) => {
   updateSelectionHighlight();
   if (newVal && newVal !== oldVal) {
@@ -508,7 +569,6 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
     <div ref="mapContainer" class="map-container"></div>
     <div ref="tooltipEl" class="map-tooltip"></div>
 
-    <!-- Color mode toggle (top-left) -->
     <div class="color-toggle">
       <button
         :class="['toggle-btn', { active: colorMode === 'simple' }]"
@@ -520,7 +580,15 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
       >Speed</button>
     </div>
 
-    <!-- Legend (bottom-left) -->
+    <div class="basemap-toggle">
+      <label class="basemap-label">Basemap</label>
+      <select v-model="basemap" class="basemap-select">
+        <option v-for="b in BASEMAPS" :key="b.id" :value="b.id">
+          {{ b.label }}
+        </option>
+      </select>
+    </div>
+
     <div class="map-legend">
       <div class="legend-title">Legend</div>
 
@@ -631,6 +699,46 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
   color: #ffffff;
 }
 
+.basemap-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  z-index: 5;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.basemap-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.basemap-select {
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #111827;
+  cursor: pointer;
+  outline: none;
+}
+
+.basemap-select:focus {
+  border-color: #3b82f6;
+}
+
 .map-legend {
   position: absolute;
   bottom: 20px;
@@ -706,7 +814,6 @@ watch(() => props.selectedStore, (newVal, oldVal) => {
   height: 16px;
 }
 
-/* AMBER swatch for the selected store */
 .legend-swatch.selected {
   background: #f59e0b;
   width: 16px;
