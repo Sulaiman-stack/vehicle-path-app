@@ -17,7 +17,30 @@ import {
 const toLngLat = (latitude, longitude) => [longitude, latitude];
 
 /**
+ * Speed thresholds (km/h) for the multi-colored path.
+ * Each entry represents the upper bound of a color band.
+ */
+export const SPEED_BANDS = [
+  { max: 10,       color: '#3b82f6', label: '0-10 km/h'   },
+  { max: 30,       color: '#10b981', label: '10-30 km/h'  },
+  { max: 50,       color: '#eab308', label: '30-50 km/h'  },
+  { max: 70,       color: '#f97316', label: '50-70 km/h'  },
+  { max: Infinity, color: '#ef4444', label: '70+ km/h'    },
+];
+
+/**
+ * Return the color for a given speed (km/h) using SPEED_BANDS.
+ */
+export function speedColor(kmh) {
+  for (const band of SPEED_BANDS) {
+    if (kmh <= band.max) return band.color;
+  }
+  return SPEED_BANDS[SPEED_BANDS.length - 1].color;
+}
+
+/**
  * Total distance traveled along the path, in kilometers.
+ * Skips stationary duplicate points.
  */
 export function totalDistanceKm(path) {
   if (!path || path.length < 2) return 0;

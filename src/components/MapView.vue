@@ -1,12 +1,12 @@
 <!-- src/components/MapView.vue -->
 <!--
   Renders an OpenLayers map showing:
-    - The vehicle's GPS path (as a polyline)
+    - The vehicle's GPS path (single-color line OR multi-colored by speed)
     - All store locations (as markers)
     - The closest store highlighted differently
     - An animated vehicle marker at the current playback index
-    - A legend box explaining the colors
-    - Auto-following behavior during playback (map centers on the vehicle)
+    - A legend box explaining colors
+    - A toggle to switch between simple and speed-colored path
   Emits "feature-click" events when a path point or store marker is clicked.
 -->
 <script setup>
@@ -23,41 +23,38 @@ import { fromLonLat } from 'ol/proj';
 import { Style, Stroke, Circle as CircleStyle, Fill } from 'ol/style';
 import Overlay from 'ol/Overlay';
 import { defaults as defaultControls } from 'ol/control';
+import { SPEED_BANDS, speedColor } from '../utils/geo.js';
 
 const props = defineProps({
-  // Array of { latitude, longitude, timeStamp, heading, speed }
   path: { type: Array, default: () => [] },
-  // Array of { name, latitude, longitude }
   stores: { type: Array, default: () => [] },
-  // The closest store object: { store, distanceKm } or null
   closestStore: { type: Object, default: null },
-  // Index of the path point the vehicle is currently at (for animation)
   currentIndex: { type: Number, default: -1 },
-  // Whether playback is active
   isPlaying: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['feature-click']);
 
-const mapContainer = ref(null);          // DOM element for the map
-const tooltipEl = ref(null);             // DOM element for the tooltip
+const mapContainer = ref(null);
+const tooltipEl = ref(null);
 let map = null;
 let overlay = null;
 let pathSource = null;
 let storesSource = null;
-let vehicleSource = null;     // holds the moving vehicle marker
-let vehicleFeature = null;    // the marker feature itself
+let vehicleSource = null;
+let vehicleFeature = null;
+
+/* Color mode: 'simple' = single blue line, 'speed' = multi-colored by speed */
+const colorMode = ref('simple');
 
 /* ------------------------------------------------------------------ */
-/* Styles for map features                                            */
+/* Styles                                                            */
 /* ------------------------------------------------------------------ */
 
-// Path line style — blue
 const pathStyle = new Style({
   stroke: new Stroke({ color: '#3b82f6', width: 4 }),
 });
 
-// Regular store marker — small green dot with white border
 const storeStyle = new Style({
   image: new CircleStyle({
     radius: 7,
@@ -66,7 +63,6 @@ const storeStyle = new Style({
   }),
 });
 
-// Closest store marker — larger red dot so it stands out
 const closestStoreStyle = new Style({
   image: new CircleStyle({
     radius: 11,
@@ -75,7 +71,6 @@ const closestStoreStyle = new Style({
   }),
 });
 
-// Vehicle marker — purple circle with a white ring, always on top
 const vehicleStyle = new Style({
   image: new CircleStyle({
     radius: 9,
@@ -85,8 +80,16 @@ const vehicleStyle = new Style({
   zIndex: 10,
 });
 
+/* Bigger invisible hit targets for hover (radius 14px instead of 6px) */
+const hoverPointStyle = new Style({
+  image: new CircleStyle({
+    radius: 14,
+    fill: new Fill({ color: 'transparent' }),
+  }),
+});
+
 /* ------------------------------------------------------------------ */
-/* Build features from data                                           */
+/* Build features                                                     */
 /* ------------------------------------------------------------------ */
 
 function buildPathFeatures(path) {
@@ -99,27 +102,67 @@ function buildPathFeatures(path) {
   });
   lineFeature.setStyle(pathStyle);
 
-  // Hidden point per path sample so hovering near the line still
-  // gives us access to that point's timestamp/speed/heading.
-  const pointFeatures = path.map((p, idx) => {
+  const hoverPoints = path.map((p, idx) => {
     const f = new Feature({
       geometry: new Point(fromLonLat([p.longitude, p.latitude])),
       kind: 'path-point',
       data: p,
       index: idx,
     });
-    f.setStyle(
-      new Style({
-        image: new CircleStyle({
-          radius: 6,
-          fill: new Fill({ color: 'transparent' }),
-        }),
-      })
-    );
+    f.setStyle(hoverPointStyle);
     return f;
   });
 
-  return [lineFeature, ...pointFeatures];
+  return [lineFeature, ...hoverPoints];
+}
+
+function buildSpeedSegments(path) {
+  if (!path?.length || path.length < 2) return [];
+
+  const features = [];
+
+  for (let i = 1; i < path.length; i++) {
+    const prev = path[i - 1];
+    const curr = path[i];
+
+    if (prev.latitude === curr.latitude && prev.longitude === curr.longitude) {
+      continue;
+    }
+
+    const segment = new Feature({
+      geometry: new LineString([
+        fromLonLat([prev.longitude, prev.latitude]),
+        fromLonLat([curr.longitude, curr.latitude]),
+      ]),
+      kind: 'path',
+    });
+
+    segment.setStyle(
+      new Style({
+        stroke: new Stroke({
+          color: speedColor(curr.speed),
+          width: 4,
+        }),
+      })
+    );
+
+    features.push(segment);
+  }
+
+  return features;
+}
+
+function buildHoverPoints(path) {
+  return path.map((p, idx) => {
+    const f = new Feature({
+      geometry: new Point(fromLonLat([p.longitude, p.latitude])),
+      kind: 'path-point',
+      data: p,
+      index: idx,
+    });
+    f.setStyle(hoverPointStyle);
+    return f;
+  });
 }
 
 function buildStoreFeatures(stores, closestStore) {
@@ -139,10 +182,6 @@ function buildStoreFeatures(stores, closestStore) {
   });
 }
 
-/**
- * Update or create the vehicle marker at the current playback index.
- * Optimized: mutates existing geometry instead of recreating it.
- */
 function updateVehicleFeature() {
   if (!map) return;
 
@@ -177,7 +216,7 @@ function updateVehicleFeature() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Tooltip helpers                                                    */
+/* Tooltip                                                           */
 /* ------------------------------------------------------------------ */
 
 function showTooltip(html, coordinate) {
@@ -193,9 +232,6 @@ function hideTooltip() {
   overlay.setPosition(undefined);
 }
 
-/**
- * Format the popup HTML for a given clicked/hovered feature.
- */
 function formatFeatureHtml(feature) {
   const kind = feature.get('kind');
   const data = feature.get('data');
@@ -246,7 +282,7 @@ function formatFeatureHtml(feature) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Map lifecycle                                                      */
+/* Map lifecycle                                                     */
 /* ------------------------------------------------------------------ */
 
 function initMap() {
@@ -281,12 +317,11 @@ function initMap() {
     }),
   });
 
-  // Pointer move: always active — works during playback AND when paused.
   map.on('pointermove', (evt) => {
     const feature = map.forEachFeatureAtPixel(
       evt.pixel,
       (f) => f,
-      { hitTolerance: 10 }
+      { hitTolerance: 15 }
     );
 
     if (feature && feature.get('kind') !== 'path') {
@@ -298,17 +333,15 @@ function initMap() {
     }
   });
 
-  // Clear tooltip when mouse leaves the map entirely
   map.getTargetElement().addEventListener('mouseleave', () => {
     hideTooltip();
   });
 
-  // Click: emit for parent if user clicks a path point, store, or vehicle
   map.on('click', (evt) => {
     const feature = map.forEachFeatureAtPixel(
       evt.pixel,
       (f) => f,
-      { hitTolerance: 10 }
+      { hitTolerance: 15 }
     );
     if (!feature) return;
 
@@ -334,23 +367,28 @@ function handleResize() {
 }
 
 /* ------------------------------------------------------------------ */
-/* React to data changes                                              */
+/* Data rendering                                                    */
 /* ------------------------------------------------------------------ */
 
 function renderData() {
   if (!map) return;
 
   pathSource.clear();
-  const pathFeatures = buildPathFeatures(props.path);
-  pathSource.addFeatures(pathFeatures);
+
+  if (colorMode.value === 'speed') {
+    // Multi-colored segments + invisible hover points
+    const segments = buildSpeedSegments(props.path);
+    pathSource.addFeatures(segments);
+    pathSource.addFeatures(buildHoverPoints(props.path));
+  } else {
+    // Single blue line + hover points
+    pathSource.addFeatures(buildPathFeatures(props.path));
+  }
 
   storesSource.clear();
-  const storeFeatures = buildStoreFeatures(props.stores, props.closestStore);
-  storesSource.addFeatures(storeFeatures);
+  storesSource.addFeatures(buildStoreFeatures(props.stores, props.closestStore));
 
-  if (props.currentIndex >= 0) {
-    updateVehicleFeature();
-  }
+  if (props.currentIndex >= 0) updateVehicleFeature();
 
   if (props.path.length > 1) {
     const extent = pathSource.getExtent();
@@ -375,29 +413,18 @@ onBeforeUnmount(() => {
   map = null;
 });
 
-// Re-render whenever data changes
 watch(() => [props.path, props.stores, props.closestStore], renderData, {
   deep: false,
 });
 
-// Move the vehicle marker when the playback index changes
 watch(() => props.currentIndex, updateVehicleFeature);
 
-// When playback stops, clear the tooltip so hover is instantly responsive
 watch(() => props.isPlaying, (playing) => {
   if (!playing) hideTooltip();
 });
 
-// Follow the vehicle during playback: recenter the map on each tick.
-// Only does this when actively playing, so the user can freely pan when paused.
-watch(() => props.currentIndex, (idx) => {
-  if (!map) return;
-  if (!props.isPlaying) return;
-  if (idx < 0 || idx >= props.path.length) return;
-
-  const p = props.path[idx];
-  const coord = fromLonLat([p.longitude, p.latitude]);
-  map.getView().setCenter(coord);
+watch(colorMode, () => {
+  renderData();
 });
 </script>
 
@@ -406,13 +433,44 @@ watch(() => props.currentIndex, (idx) => {
     <div ref="mapContainer" class="map-container"></div>
     <div ref="tooltipEl" class="map-tooltip"></div>
 
-    <!-- Legend — floating box in the bottom-left of the map -->
+    <!-- Color mode toggle (top-left) -->
+    <div class="color-toggle">
+      <button
+        :class="['toggle-btn', { active: colorMode === 'simple' }]"
+        @click="colorMode = 'simple'"
+      >Simple</button>
+      <button
+        :class="['toggle-btn', { active: colorMode === 'speed' }]"
+        @click="colorMode = 'speed'"
+      >Speed</button>
+    </div>
+
+    <!-- Legend (bottom-left) -->
     <div class="map-legend">
       <div class="legend-title">Legend</div>
-      <div class="legend-item">
-        <span class="legend-swatch path"></span>
-        <span>Vehicle path</span>
-      </div>
+
+      <template v-if="colorMode === 'simple'">
+        <div class="legend-item">
+          <span class="legend-swatch path"></span>
+          <span>Vehicle path</span>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="legend-subtitle">Path speed</div>
+        <div
+          v-for="band in SPEED_BANDS"
+          :key="band.label"
+          class="legend-item"
+        >
+          <span
+            class="legend-swatch"
+            :style="{ backgroundColor: band.color }"
+          ></span>
+          <span>{{ band.label }}</span>
+        </div>
+      </template>
+
       <div class="legend-item">
         <span class="legend-swatch store"></span>
         <span>Store</span>
@@ -456,7 +514,47 @@ watch(() => props.currentIndex, (idx) => {
   max-width: 240px;
 }
 
-/* ---------------- Map legend ---------------- */
+/* ---------------- Color mode toggle ---------------- */
+
+.color-toggle {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 3px;
+  display: flex;
+  gap: 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  z-index: 5;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.toggle-btn {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+}
+
+.toggle-btn:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.toggle-btn.active {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+/* ---------------- Legend ---------------- */
 
 .map-legend {
   position: absolute;
@@ -484,6 +582,14 @@ watch(() => props.currentIndex, (idx) => {
   margin-bottom: 8px;
 }
 
+.legend-subtitle {
+  font-size: 10px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 6px 0 4px 0;
+}
+
 .legend-item {
   display: flex;
   align-items: center;
@@ -506,7 +612,6 @@ watch(() => props.currentIndex, (idx) => {
   box-shadow: 0 0 0 1px #d1d5db;
 }
 
-/* Line swatch for the path */
 .legend-swatch.path {
   width: 16px;
   height: 4px;
@@ -516,7 +621,6 @@ watch(() => props.currentIndex, (idx) => {
   box-shadow: none;
 }
 
-/* Colored dots for markers */
 .legend-swatch.store {
   background: #10b981;
 }
